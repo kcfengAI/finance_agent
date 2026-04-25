@@ -276,7 +276,7 @@ with tab2:
                     due_date = st.date_input("截止日期", value=due_val)
                     note = st.text_input("備註", value=result.get("note", ""))
 
-                    if st.form_submit_button("✅ 確認儲存", type="primary"):
+                    if st.form_submit_button("✅ 確認儲存到 Google Sheet", type="primary"):
                         ws = get_sheet()
                         today = datetime.date.today().isoformat()
                         due_str = due_date.isoformat() if due_date else ""
@@ -286,6 +286,7 @@ with tab2:
                         ])
                         st.success(f"✅ 已新增：{name}")
                         st.cache_data.clear()
+                        st.rerun()
             else:
                 st.error("❌ 辨識失敗，請確認圖片清晰，或手動輸入")
 
