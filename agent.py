@@ -46,7 +46,7 @@ GMAIL_SCOPES = [
 ]
 
 def get_gmail_creds():
-gmail_token_json = os.environ.get("GMAIL_TOKEN")
+    gmail_token_json = os.environ.get("GMAIL_TOKEN")
     if gmail_token_json:
         import json
         creds = OAuthCredentials.from_authorized_user_info(json.loads(gmail_token_json), GMAIL_SCOPES)
