@@ -6,12 +6,13 @@
 import streamlit as st
 import gspread
 import datetime
+import json
+import os
 import pandas as pd
 from google.oauth2.service_account import Credentials
 
 # ── 設定 ────────────────────────────────────────────────────────────
-SPREADSHEET_ID   = "1vn-2RQqOxAXydbptP2B88vyKiWhKFeNjAUi3Wdn-etQ"
-CREDENTIALS_FILE = "credentials.json"
+SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "1vn-2RQqOxAXydbptP2B88vyKiWhKFeNjAUi3Wdn-etQ")
 
 st.set_page_config(
     page_title="財務帳單管理",
@@ -19,27 +20,26 @@ st.set_page_config(
     layout="wide"
 )
 
-# ── 自訂樣式 ─────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-    .metric-card { background: #f8f9fa; border-radius: 10px; padding: 16px; text-align: center; }
-    .stDataFrame { border-radius: 10px; }
-    div[data-testid="stMetric"] { background: #f8f9fa; border-radius: 10px; padding: 12px; }
-</style>
-""", unsafe_allow_html=True)
-
 # ── Google Sheet 連線 ────────────────────────────────────────────────
 @st.cache_resource
 def get_sheet():
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
+
+    # 雲端：從 Streamlit Secrets 讀取
+    if "GOOGLE_CREDENTIALS" in st.secrets:
+        creds_info = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
+        creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
+    else:
+        # 本機：從檔案讀取
+        creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
+
     gc = gspread.authorize(creds)
     sh = gc.open_by_key(SPREADSHEET_ID)
     try:
         return sh.worksheet("帳單記錄")
     except gspread.WorksheetNotFound:
         ws = sh.add_worksheet("帳單記錄", rows=1000, cols=10)
-        ws.append_row(["ID", "服務名稱", "金額", "幣別", "截止日期", "狀態", "來源", "建立日期", "備註"])
+        ws.append_row(["ID","服務名稱","金額","幣別","截止日期","狀態","來源","建立日期","備註"])
         return ws
 
 @st.cache_data(ttl=60)
@@ -71,10 +71,8 @@ df = load_data()
 if df.empty:
     st.info("還沒有帳單記錄，先跑 agent.py 掃描 Gmail！")
 else:
-    # ── 統計看板 ─────────────────────────────────────────────────────
     pending = df[df['狀態'] == '待繳']
     paid = df[df['狀態'] == '已繳']
-
     overdue = pending[pending['截止日期'].apply(
         lambda x: days_until(x) is not None and days_until(x) < 0
     )]
@@ -86,10 +84,9 @@ else:
     col1.metric("所有帳單", len(df))
     col2.metric("待繳", len(pending))
     col3.metric("已繳", len(paid))
-    col4.metric("逾期", len(overdue), delta=f"-{len(overdue)}" if len(overdue) > 0 else None, delta_color="inverse")
+    col4.metric("逾期", len(overdue))
     col5.metric("即將到期", len(soon))
 
-    # ── 到期警示 ─────────────────────────────────────────────────────
     if len(overdue) > 0:
         st.error(f"⚠️ 有 {len(overdue)} 筆帳單已逾期！")
     if len(soon) > 0:
@@ -97,14 +94,12 @@ else:
 
     st.divider()
 
-    # ── 篩選和搜尋 ────────────────────────────────────────────────────
     col_search, col_filter = st.columns([2, 1])
     with col_search:
         search = st.text_input("🔍 搜尋服務名稱", placeholder="輸入關鍵字…")
     with col_filter:
         status_filter = st.selectbox("篩選狀態", ["全部", "待繳", "已繳", "逾期", "即將到期"])
 
-    # 套用篩選
     filtered = df.copy()
     if search:
         filtered = filtered[filtered['服務名稱'].str.contains(search, case=False, na=False)]
@@ -121,7 +116,6 @@ else:
             lambda x: days_until(x) is not None and 0 <= days_until(x) <= 7
         )]
 
-    # ── 帳單列表 ─────────────────────────────────────────────────────
     st.subheader(f"帳單列表（{len(filtered)} 筆）")
 
     for _, row in filtered.iterrows():
@@ -130,78 +124,62 @@ else:
         is_overdue = not is_paid and days is not None and days < 0
         is_soon = not is_paid and days is not None and 0 <= days <= 7
 
-        # 顏色標示
-        if is_overdue:
-            border_color = "#ff4b4b"
-        elif is_soon:
-            border_color = "#ffa500"
-        elif is_paid:
-            border_color = "#00cc88"
-        else:
-            border_color = "#e0e0e0"
+        col_name, col_amt, col_due, col_status, col_action = st.columns([3, 2, 2, 1, 2])
 
-        with st.container():
-            st.markdown(f"""
-            <div style="border-left: 4px solid {border_color}; padding: 8px 16px; margin: 4px 0; background: #fafafa; border-radius: 0 8px 8px 0;">
-            </div>
-            """, unsafe_allow_html=True)
+        with col_name:
+            st.write(f"**{row['服務名稱']}**")
+            if row['備註']:
+                st.caption(row['備註'])
 
-            col_name, col_amt, col_due, col_status, col_action = st.columns([3, 2, 2, 1, 2])
+        with col_amt:
+            amt = row['金額']
+            if pd.notna(amt):
+                st.write(f"{row['幣別']} {amt:,.2f}")
+            else:
+                st.write("—")
 
-            with col_name:
-                st.write(f"**{row['服務名稱']}**")
-                if row['備註']:
-                    st.caption(row['備註'])
-
-            with col_amt:
-                amt = row['金額']
-                if pd.notna(amt):
-                    st.write(f"{row['幣別']} {amt:,.2f}")
-                else:
-                    st.write("—")
-
-            with col_due:
-                if row['截止日期']:
-                    if is_overdue:
-                        st.write(f"🔴 {row['截止日期']}")
-                        st.caption(f"逾期 {abs(days)} 天")
-                    elif is_soon:
-                        st.write(f"🟡 {row['截止日期']}")
-                        st.caption(f"還有 {days} 天")
-                    else:
-                        st.write(row['截止日期'])
-                else:
-                    st.write("—")
-
-            with col_status:
-                if is_paid:
-                    st.success("已繳")
-                elif is_overdue:
-                    st.error("逾期")
+        with col_due:
+            if row['截止日期']:
+                if is_overdue:
+                    st.write(f"🔴 {row['截止日期']}")
+                    st.caption(f"逾期 {abs(days)} 天")
                 elif is_soon:
-                    st.warning("快到期")
+                    st.write(f"🟡 {row['截止日期']}")
+                    st.caption(f"還有 {days} 天")
                 else:
-                    st.info("待繳")
+                    st.write(row['截止日期'])
+            else:
+                st.write("—")
 
-            with col_action:
-                if not is_paid:
-                    if st.button("✅ 標記已繳", key=f"paid_{row['ID']}"):
-                        ws = get_sheet()
-                        records = ws.get_all_records()
-                        for i, r in enumerate(records):
-                            if str(r.get('ID')) == str(row['ID']):
-                                ws.update_cell(i + 2, 6, '已繳')
-                                st.cache_data.clear()
-                                st.rerun()
-                else:
-                    if st.button("↩️ 取消已繳", key=f"unpaid_{row['ID']}"):
-                        ws = get_sheet()
-                        records = ws.get_all_records()
-                        for i, r in enumerate(records):
-                            if str(r.get('ID')) == str(row['ID']):
-                                ws.update_cell(i + 2, 6, '待繳')
-                                st.cache_data.clear()
-                                st.rerun()
+        with col_status:
+            if is_paid:
+                st.success("已繳")
+            elif is_overdue:
+                st.error("逾期")
+            elif is_soon:
+                st.warning("快到期")
+            else:
+                st.info("待繳")
+
+        with col_action:
+            if not is_paid:
+                if st.button("✅ 標記已繳", key=f"paid_{row['ID']}"):
+                    ws = get_sheet()
+                    records = ws.get_all_records()
+                    for i, r in enumerate(records):
+                        if str(r.get('ID')) == str(row['ID']):
+                            ws.update_cell(i + 2, 6, '已繳')
+                            st.cache_data.clear()
+                            st.rerun()
+            else:
+                if st.button("↩️ 取消已繳", key=f"unpaid_{row['ID']}"):
+                    ws = get_sheet()
+                    records = ws.get_all_records()
+                    for i, r in enumerate(records):
+                        if str(r.get('ID')) == str(row['ID']):
+                            ws.update_cell(i + 2, 6, '待繳')
+                            st.cache_data.clear()
+                            st.rerun()
 
         st.divider()
 
@@ -233,7 +211,6 @@ with st.form("add_bill"):
             st.cache_data.clear()
             st.rerun()
 
-# ── 重新整理按鈕 ─────────────────────────────────────────────────────
 if st.button("🔄 重新整理資料"):
     st.cache_data.clear()
     st.rerun()
