@@ -1,9 +1,9 @@
 """
 財務帳單 Agent
 - 自動讀取 Gmail 電子帳單
-- 用 Gemini AI 辨識帳單內容
+- 用 Groq AI 辨識帳單內容
 - 記錄到 Google Sheet
-- 到期前發送 WhatsApp 和 Email 提醒
+- 到期前發送 Telegram 和 Email 提醒
 """
 
 import os
@@ -21,37 +21,39 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 import gspread
 
-# ── 設定區（填入你的資料）────────────────────────────────────────────
-import os
-GROQ_API_KEY      = os.environ.get("GROQ_API_KEY", "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")
-SPREADSHEET_ID    = os.environ.get("SPREADSHEET_ID", "1vn-2RQqOxAXydbptP2B88vyKiWhKFeNjAUi3Wdn-etQ")
-CREDENTIALS_FILE  = "credentials.json"
-OAUTH_TOKEN_FILE  = "token.json"
-YOUR_EMAIL        = os.environ.get("YOUR_EMAIL", "kcfengsanity@gmail.com")
-TELEGRAM_TOKEN    = os.environ.get("TELEGRAM_TOKEN", "8654866495:AAFJ5yzb2t1xvYRBUiZ8l3rQkA0JnS9Ji-E")
-TELEGRAM_CHAT_ID  = os.environ.get("TELEGRAM_CHAT_ID", "8169349551")
-DAYS_BEFORE_DUE   = [7, 3, 1]              # 提前幾天提醒
-
-
-
-
+# ── 設定區 ───────────────────────────────────────────────────────────
+GROQ_API_KEY     = os.environ.get("GROQ_API_KEY", "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")
+SPREADSHEET_ID   = os.environ.get("SPREADSHEET_ID", "1vn-2RQqOxAXydbptP2B88vyKiWhKFeNjAUi3Wdn-etQ")
+CREDENTIALS_FILE = "credentials.json"
+OAUTH_FILE       = "oauth.json"
+OAUTH_TOKEN_FILE = "token.json"
+YOUR_EMAIL       = os.environ.get("YOUR_EMAIL", "kcfengsanity@gmail.com")
+TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "8654866495:AAFJ5yzb2t1xvYRBUiZ8l3rQkA0JnS9Ji-E")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "8169349551")
+DAYS_BEFORE_DUE  = [7, 3, 1]
 
 # ── 初始化 Groq ──────────────────────────────────────────────────────
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-# ── OAuth 登入 Gmail ─────────────────────────────────────────────────
+# ── Gmail 授權範圍 ───────────────────────────────────────────────────
 GMAIL_SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
 ]
 
+# ── OAuth 登入 Gmail ─────────────────────────────────────────────────
 def get_gmail_creds():
     gmail_token_json = os.environ.get("GMAIL_TOKEN")
     if gmail_token_json:
-        import json
-        creds = OAuthCredentials.from_authorized_user_info(json.loads(gmail_token_json), GMAIL_SCOPES)
+        creds = OAuthCredentials.from_authorized_user_info(
+            json.loads(gmail_token_json), GMAIL_SCOPES
+        )
         if creds and creds.valid:
-            return creds    
+            return creds
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            return creds
+
     creds = None
     if os.path.exists(OAUTH_TOKEN_FILE):
         creds = OAuthCredentials.from_authorized_user_file(OAUTH_TOKEN_FILE, GMAIL_SCOPES)
@@ -68,29 +70,29 @@ def get_gmail_creds():
 # ── 初始化 Google Sheets ─────────────────────────────────────────────
 def get_sheet():
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+
     google_creds_json = os.environ.get("GOOGLE_CREDENTIALS")
-if google_creds_json:
-    import json
-    creds = Credentials.from_service_account_info(json.loads(google_creds_json), scopes=scopes)
-else:
-    creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
-gc = gspread.authorize(creds)
-sh = gc.open_by_key(SPREADSHEET_ID)
+    if google_creds_json:
+        creds = Credentials.from_service_account_info(
+            json.loads(google_creds_json), scopes=scopes
+        )
+    else:
+        creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
 
-    # 建立工作表（如果不存在）
-try:
-    ws = sh.worksheet("帳單記錄")
-except gspread.WorksheetNotFound:
-    ws = sh.add_worksheet("帳單記錄", rows=1000, cols=10)
-    ws.append_row(["ID", "服務名稱", "金額", "幣別", "截止日期", "狀態", "來源", "建立日期", "備註"])
+    gc = gspread.authorize(creds)
+    sh = gc.open_by_key(SPREADSHEET_ID)
 
-    return ws
-
+    try:
+        return sh.worksheet("帳單記錄")
+    except gspread.WorksheetNotFound:
+        ws = sh.add_worksheet("帳單記錄", rows=1000, cols=10)
+        ws.append_row(["ID", "服務名稱", "金額", "幣別", "截止日期", "狀態", "來源", "建立日期", "備註"])
+        return ws
 
 # ── 讀取 Gmail 帳單 ──────────────────────────────────────────────────
 def fetch_bill_emails(gmail_creds):
     service = build("gmail", "v1", credentials=gmail_creds)
-    query = "subject:(帳單 OR invoice OR 繳費 OR 扣款 OR 通知 OR bill OR payment) newer_than:30d"
+    query = "subject:(帳單 OR invoice OR 繳費 OR 扣款 OR 通知 OR bill OR payment OR receipt OR 收據 OR 訂閱 OR subscription OR 費用 OR charge) newer_than:90d"
     results = service.users().messages().list(userId="me", q=query, maxResults=20).execute()
     messages = results.get("messages", [])
 
@@ -102,7 +104,6 @@ def fetch_bill_emails(gmail_creds):
         sender  = headers.get("From", "")
         date    = headers.get("Date", "")
 
-        # 取得郵件內文
         body = ""
         if "parts" in detail["payload"]:
             for part in detail["payload"]["parts"]:
@@ -120,13 +121,12 @@ def fetch_bill_emails(gmail_creds):
             "subject": subject,
             "sender": sender,
             "date": date,
-            "body": body[:3000]  # 只取前 3000 字
+            "body": body[:3000]
         })
 
     return emails
 
-
-# ── 用 Gemini 分析帳單 ───────────────────────────────────────────────
+# ── 用 Groq AI 分析帳單 ──────────────────────────────────────────────
 def analyze_bill(email):
     prompt = f"""
 你是一個帳單分析助手。請從以下電子郵件中擷取帳單資訊。
@@ -153,21 +153,17 @@ def analyze_bill(email):
         temperature=0,
     )
     text = response.choices[0].message.content.strip()
-
-    # 清理 JSON
     text = re.sub(r"```json|```", "", text).strip()
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         return {"is_bill": False}
 
-
 # ── 存入 Google Sheet ────────────────────────────────────────────────
 def save_to_sheet(ws, email_id, bill_data):
-    # 檢查是否已存在
     existing = ws.col_values(1)
     if email_id in existing:
-        return False  # 已記錄過
+        return False
 
     today = datetime.date.today().isoformat()
     ws.append_row([
@@ -182,7 +178,6 @@ def save_to_sheet(ws, email_id, bill_data):
         bill_data.get("note", ""),
     ])
     return True
-
 
 # ── 檢查即將到期的帳單 ───────────────────────────────────────────────
 def check_due_bills(ws):
@@ -203,7 +198,6 @@ def check_due_bills(ws):
 
     return due_soon
 
-
 # ── 發送 Email 提醒 ──────────────────────────────────────────────────
 def send_email_reminder(gmail_creds, bills):
     if not bills:
@@ -223,7 +217,6 @@ def send_email_reminder(gmail_creds, bills):
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     service.users().messages().send(userId="me", body={"raw": raw}).execute()
     print(f"✅ Email 提醒已發送（{len(bills)} 筆帳單）")
-
 
 # ── 發送 Telegram 提醒 ───────────────────────────────────────────────
 def send_telegram_reminder(bills):
@@ -248,7 +241,6 @@ def send_telegram_reminder(bills):
     except Exception as e:
         print(f"❌ Telegram 發送失敗：{e}")
 
-
 # ── 主程式 ───────────────────────────────────────────────────────────
 def main():
     print("🤖 財務 Agent 啟動中…")
@@ -256,16 +248,14 @@ def main():
     ws = get_sheet()
     print("✅ Google Sheet 連線成功")
 
-    print("\n🔐 登入 Gmail（第一次會開啟瀏覽器授權）…")
+    print("\n🔐 登入 Gmail…")
     gmail_creds = get_gmail_creds()
     print("✅ Gmail 登入成功")
 
-    # 1. 讀取 Gmail 帳單
     print("\n📧 讀取 Gmail 中…")
     emails = fetch_bill_emails(gmail_creds)
     print(f"   找到 {len(emails)} 封可能的帳單郵件")
 
-    # 2. 用 AI 分析，存入試算表
     new_count = 0
     for email in emails:
         print(f"   分析：{email['subject'][:40]}…")
@@ -278,7 +268,6 @@ def main():
 
     print(f"\n📊 新增 {new_count} 筆帳單記錄")
 
-    # 3. 檢查即將到期
     print("\n⏰ 檢查即將到期的帳單…")
     due_bills = check_due_bills(ws)
 
