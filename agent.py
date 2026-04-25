@@ -22,15 +22,19 @@ from googleapiclient.discovery import build
 import gspread
 
 # ── 設定區（填入你的資料）────────────────────────────────────────────
-GROQ_API_KEY      = "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"
-SPREADSHEET_ID    = "1vn-2RQqOxAXydbptP2B88vyKiWhKFeNjAUi3Wdn-etQ"
+import os
+GROQ_API_KEY      = os.environ.get("GROQ_API_KEY", "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")
+SPREADSHEET_ID    = os.environ.get("SPREADSHEET_ID", "1vn-2RQqOxAXydbptP2B88vyKiWhKFeNjAUi3Wdn-etQ")
 CREDENTIALS_FILE  = "credentials.json"
-OAUTH_FILE        = "oauth.json"
 OAUTH_TOKEN_FILE  = "token.json"
-YOUR_EMAIL        = "kcfengsanity@gmail.com"
-TELEGRAM_TOKEN    = "8654866495:AAFJ5yzb2t1xvYRBUiZ8l3rQkA0JnS9Ji-E"
-TELEGRAM_CHAT_ID  = "8169349551"
+YOUR_EMAIL        = os.environ.get("YOUR_EMAIL", "kcfengsanity@gmail.com")
+TELEGRAM_TOKEN    = os.environ.get("TELEGRAM_TOKEN", "8654866495:AAFJ5yzb2t1xvYRBUiZ8l3rQkA0JnS9Ji-E")
+TELEGRAM_CHAT_ID  = os.environ.get("TELEGRAM_CHAT_ID", "8169349551")
 DAYS_BEFORE_DUE   = [7, 3, 1]              # 提前幾天提醒
+
+
+
+
 
 # ── 初始化 Groq ──────────────────────────────────────────────────────
 groq_client = Groq(api_key=GROQ_API_KEY)
@@ -42,6 +46,12 @@ GMAIL_SCOPES = [
 ]
 
 def get_gmail_creds():
+gmail_token_json = os.environ.get("GMAIL_TOKEN")
+    if gmail_token_json:
+        import json
+        creds = OAuthCredentials.from_authorized_user_info(json.loads(gmail_token_json), GMAIL_SCOPES)
+        if creds and creds.valid:
+            return creds    
     creds = None
     if os.path.exists(OAUTH_TOKEN_FILE):
         creds = OAuthCredentials.from_authorized_user_file(OAUTH_TOKEN_FILE, GMAIL_SCOPES)
@@ -58,6 +68,11 @@ def get_gmail_creds():
 # ── 初始化 Google Sheets ─────────────────────────────────────────────
 def get_sheet():
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    google_creds_json = os.environ.get("GOOGLE_CREDENTIALS")
+if google_creds_json:
+    import json
+    creds = Credentials.from_service_account_info(json.loads(google_creds_json), scopes=scopes)
+else:
     creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
     gc = gspread.authorize(creds)
     sh = gc.open_by_key(SPREADSHEET_ID)
