@@ -14,7 +14,7 @@ from google.oauth2.service_account import Credentials
 
 # ── 設定 ────────────────────────────────────────────────────────────
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "1vn-2RQqOxAXydbptP2B88vyKiWhKFeNjAUi3Wdn-etQ")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "填入你的_GEMINI_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 st.set_page_config(
     page_title="財務帳單管理",
@@ -59,25 +59,26 @@ def days_until(date_str):
     except:
         return None
 
+def save_bill(name, amount, currency, due_date, note, source="手動新增"):
+    ws = get_sheet()
+    today = datetime.date.today().isoformat()
+    due_str = due_date.isoformat() if due_date else ""
+    ws.append_row([
+        f"{source.replace(' ','')}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
+        name, float(amount), currency, due_str, "待繳", source, today, note
+    ])
+    st.cache_data.clear()
+
 # ── 用 Gemini 辨識圖片帳單 ───────────────────────────────────────────
 def analyze_image_bill(image_bytes, mime_type):
     import urllib.request
-    import urllib.parse
-
     key = st.secrets.get("GEMINI_API_KEY", GEMINI_API_KEY)
     image_b64 = base64.b64encode(image_bytes).decode()
-
     payload = json.dumps({
         "contents": [{
             "parts": [
-                {
-                    "inline_data": {
-                        "mime_type": mime_type,
-                        "data": image_b64
-                    }
-                },
-                {
-                    "text": """請從這張帳單圖片中擷取資訊，用 JSON 格式回傳：
+                {"inline_data": {"mime_type": mime_type, "data": image_b64}},
+                {"text": """請從這張帳單圖片中擷取資訊，用 JSON 格式回傳：
 {
   "service_name": "服務或公司名稱",
   "amount": 金額數字,
@@ -85,14 +86,12 @@ def analyze_image_bill(image_bytes, mime_type):
   "due_date": "截止日期 YYYY-MM-DD 格式，找不到填 null",
   "note": "備註"
 }
-只回傳 JSON，不要其他文字。"""
-                }
+只回傳 JSON，不要其他文字。"""}
             ]
         }],
         "generationConfig": {"temperature": 0}
     }).encode()
-
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={key}"
     req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req) as resp:
@@ -101,13 +100,13 @@ def analyze_image_bill(image_bytes, mime_type):
             text = text.replace("```json", "").replace("```", "").strip()
             return json.loads(text)
     except Exception as e:
+        st.error(f"辨識失敗：{e}")
         return None
 
 # ── 標題 ─────────────────────────────────────────────────────────────
 st.title("💰 財務帳單管理")
 st.caption("資料同步自 Google Sheet，每 60 秒自動更新")
 
-# ── Tab 介面 ─────────────────────────────────────────────────────────
 tab1, tab2, tab3 = st.tabs(["📋 帳單列表", "📷 拍照新增", "➕ 手動新增"])
 
 # ── Tab 1：帳單列表 ──────────────────────────────────────────────────
@@ -120,11 +119,9 @@ with tab1:
         pending = df[df['狀態'] == '待繳']
         paid = df[df['狀態'] == '已繳']
         overdue = pending[pending['截止日期'].apply(
-            lambda x: days_until(x) is not None and days_until(x) < 0
-        )]
+            lambda x: days_until(x) is not None and days_until(x) < 0)]
         soon = pending[pending['截止日期'].apply(
-            lambda x: days_until(x) is not None and 0 <= days_until(x) <= 7
-        )]
+            lambda x: days_until(x) is not None and 0 <= days_until(x) <= 7)]
 
         col1, col2, col3, col4, col5 = st.columns(5)
         col1.metric("所有帳單", len(df))
@@ -155,12 +152,10 @@ with tab1:
             filtered = filtered[filtered['狀態'] == '已繳']
         elif status_filter == "逾期":
             filtered = filtered[filtered['截止日期'].apply(
-                lambda x: days_until(x) is not None and days_until(x) < 0
-            )]
+                lambda x: days_until(x) is not None and days_until(x) < 0)]
         elif status_filter == "即將到期":
             filtered = filtered[filtered['截止日期'].apply(
-                lambda x: days_until(x) is not None and 0 <= days_until(x) <= 7
-            )]
+                lambda x: days_until(x) is not None and 0 <= days_until(x) <= 7)]
 
         st.subheader(f"帳單列表（{len(filtered)} 筆）")
 
@@ -179,10 +174,7 @@ with tab1:
 
             with col_amt:
                 amt = row['金額']
-                if pd.notna(amt):
-                    st.write(f"{row['幣別']} {amt:,.2f}")
-                else:
-                    st.write("—")
+                st.write(f"{row['幣別']} {amt:,.2f}" if pd.notna(amt) else "—")
 
             with col_due:
                 if row['截止日期']:
@@ -238,57 +230,52 @@ with tab2:
     st.subheader("📷 拍照辨識紙本帳單")
     st.caption("拍照或上傳帳單圖片，AI 自動辨識金額和日期")
 
-    uploaded = st.file_uploader(
-        "上傳帳單照片",
-        type=["jpg", "jpeg", "png"],
-        help="支援 JPG、PNG 格式"
-    )
+    uploaded = st.file_uploader("上傳帳單照片", type=["jpg", "jpeg", "png"])
 
     if uploaded:
         st.image(uploaded, caption="上傳的帳單", use_column_width=True)
 
         if st.button("🤖 AI 自動辨識", type="primary"):
             with st.spinner("AI 辨識中，請稍候…"):
-                image_bytes = uploaded.read()
-                mime_type = uploaded.type
-                result = analyze_image_bill(image_bytes, mime_type)
+                image_bytes = uploaded.getvalue()
+                result = analyze_image_bill(image_bytes, uploaded.type)
 
             if result:
-                st.success("✅ 辨識成功！請確認以下資料：")
+                st.success("✅ 辨識完成！請確認並修改以下資料：")
+                st.session_state['ocr_result'] = result
+                st.session_state['ocr_ready'] = True
 
-                with st.form("confirm_image_bill"):
-                    name = st.text_input("服務名稱", value=result.get("service_name", ""))
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        amount = st.number_input("金額", value=float(result.get("amount") or 0), min_value=0.0, step=1.0)
-                    with col2:
-                        currency = st.selectbox("幣別", ["TWD", "USD", "JPY", "TRY", "EUR"],
-                            index=["TWD", "USD", "JPY", "TRY", "EUR"].index(result.get("currency", "TWD"))
-                            if result.get("currency") in ["TWD", "USD", "JPY", "TRY", "EUR"] else 0
-                        )
+    if st.session_state.get('ocr_ready'):
+        result = st.session_state['ocr_result']
 
-                    due_val = None
-                    if result.get("due_date"):
-                        try:
-                            due_val = datetime.date.fromisoformat(result["due_date"])
-                        except:
-                            due_val = None
-                    due_date = st.date_input("截止日期", value=due_val)
-                    note = st.text_input("備註", value=result.get("note", ""))
+        name = st.text_input("服務名稱", value=result.get("service_name", ""), key="ocr_name")
+        col1, col2 = st.columns(2)
+        with col1:
+            amount = st.number_input("金額", value=float(result.get("amount") or 0), min_value=0.0, step=1.0, key="ocr_amount")
+        with col2:
+            cur_list = ["TWD", "USD", "JPY", "TRY", "EUR"]
+            cur_val = result.get("currency", "TWD")
+            cur_idx = cur_list.index(cur_val) if cur_val in cur_list else 0
+            currency = st.selectbox("幣別", cur_list, index=cur_idx, key="ocr_currency")
 
-                    if st.form_submit_button("✅ 確認儲存到 Google Sheet", type="primary"):
-                        ws = get_sheet()
-                        today = datetime.date.today().isoformat()
-                        due_str = due_date.isoformat() if due_date else ""
-                        ws.append_row([
-                            f"photo_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
-                            name, amount, currency, due_str, "待繳", "拍照新增", today, note
-                        ])
-                        st.success(f"✅ 已新增：{name}")
-                        st.cache_data.clear()
-                        st.rerun()
+        due_val = None
+        if result.get("due_date"):
+            try:
+                due_val = datetime.date.fromisoformat(result["due_date"])
+            except:
+                due_val = None
+        due_date = st.date_input("截止日期", value=due_val, key="ocr_due")
+        note = st.text_input("備註", value=result.get("note", ""), key="ocr_note")
+
+        if st.button("✅ 儲存到 Google Sheet", type="primary", key="ocr_save"):
+            if not name:
+                st.error("請填入服務名稱！")
             else:
-                st.error("❌ 辨識失敗，請確認圖片清晰，或手動輸入")
+                save_bill(name, amount, currency, due_date, note, source="拍照新增")
+                st.success(f"✅ 已儲存：{name}")
+                st.session_state['ocr_ready'] = False
+                st.session_state['ocr_result'] = {}
+                st.rerun()
 
 # ── Tab 3：手動新增 ──────────────────────────────────────────────────
 with tab3:
@@ -303,18 +290,10 @@ with tab3:
             due_date = st.date_input("截止日期", value=None)
             note = st.text_input("備註（選填）", placeholder="例：年費、家庭方案")
 
-        submitted = st.form_submit_button("儲存帳單", type="primary")
-        if submitted:
+        if st.form_submit_button("儲存帳單", type="primary"):
             if not name:
                 st.error("請填入服務名稱！")
             else:
-                ws = get_sheet()
-                today = datetime.date.today().isoformat()
-                due_str = due_date.isoformat() if due_date else ""
-                ws.append_row([
-                    f"manual_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
-                    name, amount, currency, due_str, "待繳", "手動新增", today, note
-                ])
+                save_bill(name, amount, currency, due_date, note, source="手動新增")
                 st.success(f"✅ 已新增：{name}")
-                st.cache_data.clear()
                 st.rerun()
