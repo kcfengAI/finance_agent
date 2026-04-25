@@ -74,15 +74,15 @@ if google_creds_json:
     creds = Credentials.from_service_account_info(json.loads(google_creds_json), scopes=scopes)
 else:
     creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
-    gc = gspread.authorize(creds)
-    sh = gc.open_by_key(SPREADSHEET_ID)
+gc = gspread.authorize(creds)
+sh = gc.open_by_key(SPREADSHEET_ID)
 
     # 建立工作表（如果不存在）
-    try:
-        ws = sh.worksheet("帳單記錄")
-    except gspread.WorksheetNotFound:
-        ws = sh.add_worksheet("帳單記錄", rows=1000, cols=10)
-        ws.append_row(["ID", "服務名稱", "金額", "幣別", "截止日期", "狀態", "來源", "建立日期", "備註"])
+try:
+    ws = sh.worksheet("帳單記錄")
+except gspread.WorksheetNotFound:
+    ws = sh.add_worksheet("帳單記錄", rows=1000, cols=10)
+    ws.append_row(["ID", "服務名稱", "金額", "幣別", "截止日期", "狀態", "來源", "建立日期", "備註"])
 
     return ws
 
