@@ -28,7 +28,7 @@ CREDENTIALS_FILE = "credentials.json"
 OAUTH_FILE       = "oauth.json"
 OAUTH_TOKEN_FILE = "token.json"
 YOUR_EMAIL       = os.environ.get("YOUR_EMAIL", "kcfengsanity@gmail.com")
-TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "8654866495:AAFJ5yzb2t1xvYRBUiZ8l3rQkA0JnS9Ji-E")
+TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "8169349551")
 DAYS_BEFORE_DUE  = [7, 3, 1]
 
