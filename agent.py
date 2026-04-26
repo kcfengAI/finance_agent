@@ -22,7 +22,7 @@ from googleapiclient.discovery import build
 import gspread
 
 # ── 設定區 ───────────────────────────────────────────────────────────
-GROQ_API_KEY     = os.environ.get("GROQ_API_KEY", "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")
+GROQ_API_KEY     = os.environ.get("GROQ_API_KEY", "")
 SPREADSHEET_ID   = os.environ.get("SPREADSHEET_ID", "1vn-2RQqOxAXydbptP2B88vyKiWhKFeNjAUi3Wdn-etQ")
 CREDENTIALS_FILE = "credentials.json"
 OAUTH_FILE       = "oauth.json"
